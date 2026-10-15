@@ -15,9 +15,11 @@ node server.js
 
 Open http://localhost:3000 (port via `PORT` env var).
 
+Deploy: Vercel serves `index.html` statically and runs `api/` as serverless functions. No config needed.
+
 ## Notes
 
 - Quotes come from Yahoo Finance's unofficial chart API (`query1.finance.yahoo.com`). Free, but unofficial — if Yahoo changes it, quotes break.
-- `server.js` exists because browsers are CORS-blocked from calling Yahoo directly; it also lets you keep the API details out of the client.
+- `server.js` is for local runs and proxies Yahoo because browsers are CORS-blocked from calling it directly. On Vercel the same routes are served by `api/quotes.js` and `api/news.js`.
 - The watchlist persists in browser `localStorage` (per browser, not on the server).
 - Symbols: Yahoo conventions — `AAPL`, `MSFT`, `BRK-B`, `SAP.DE`.
