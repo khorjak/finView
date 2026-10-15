@@ -119,6 +119,7 @@ function render(quotes) {
     return `<tr class="${flash}">
       <td class="sym"><a href="#" data-news="${sym}" title="Latest news">${sym}</a></td>
       <td class="name" title="${esc(q.name)}">${esc(q.name)}</td>
+      <td class="num">${fmt(q.price, q.currency)}</td>
       <td class="num ${cls(q.change)}">${q.change >= 0 ? '+' : '−'}${Math.abs(q.change).toFixed(2)}</td>
       <td class="num ${cls(q.changePercent)}">${pct(q.changePercent)}</td>
       <td class="num">${sparkline(q.closes, q.change)}</td>
