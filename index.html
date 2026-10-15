@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>finView</title>
+<style>
+  :root {
+    --bg: #0f1115; --surface: #161a22; --border: #262c38;
+    --fg: #e6e9ef; --muted: #8a93a3; --accent: #4c8dff;
+    --up: #26a69a; --down: #ef5350;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.45 system-ui, "Segoe UI", sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  form { display: flex; gap: 8px; margin-bottom: 20px; }
+  input {
+    flex: 1; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--surface); color: var(--fg);
+    font-size: 15px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    padding: 10px 16px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 15px; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--muted); padding: 4px 10px; font-size: 14px; }
+  button.ghost:hover { color: var(--fg); }
+  .msg { color: var(--down); font-size: 13px; min-height: 18px; margin: -12px 0 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .sym { font-weight: 600; }
+  .name { color: var(--muted); font-size: 13px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .err { color: var(--muted); font-style: italic; }
+  tr.flash-up td { animation: flashUp 1s; } tr.flash-down td { animation: flashDown 1s; }
+  @keyframes flashUp { 0% { background: rgba(38,166,154,.25); } 100% { background: transparent; } }
+  @keyframes flashDown { 0% { background: rgba(239,83,80,.25); } 100% { background: transparent; } }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+  .status { color: var(--muted); font-size: 12px; margin-top: 12px; display: flex; justify-content: space-between; }
+  svg { display: block; margin-left: auto; }
+  td.sym a { color: var(--accent); text-decoration: none; }
+  td.sym a:hover { text-decoration: underline; }
+  #popup {
+    display: none; position: fixed; z-index: 10; width: 360px; max-width: calc(100vw - 16px);
+    max-height: 60vh; overflow-y: auto; padding: 12px 14px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.55);
+  }
+  #popup .ptitle {
+    color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+  }
+  #popup a.headline { display: block; color: var(--fg); text-decoration: none; padding: 7px 0 2px; }
+  #popup a.headline:hover { color: var(--accent); text-decoration: underline; }
+  #popup .pub { color: var(--muted); font-size: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  #popup .pbody { color: var(--muted); padding: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>finView</h1>
+  <div class="sub">Track your stocks. Data via Yahoo Finance, refreshed every 30s.</div>
+  <form id="addForm">
+    <input id="symbolInput" placeholder="Add symbol (e.g. AAPL, MSFT, SAP.DE)" autocomplete="off" spellcheck="false">
+    <button type="submit">Add</button>
+  </form>
+  <div class="msg" id="msg"></div>
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Name</th><th class="num">Price</th>
+        <th class="num">Change</th><th class="num">Change %</th>
+        <th class="num">Today</th><th></th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="empty" id="empty">Nothing tracked yet — add a symbol like AAPL to get started.</div>
+  <div class="status"><span id="count"></span><span id="updated"></span></div>
+</main>
+<div id="popup"></div>
+<script>
+const STORAGE_KEY = 'finView.watchlist';
+let watchlist = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+const lastPrice = {}; // symbol -> previous rendered price, for flash
+
+const $ = id => document.getElementById(id);
+const fmt = (v, cur) => v == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(v);
+const pct = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+const cls = v => v == null ? '' : v >= 0 ? 'up' : 'down';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function sparkline(closes, dir) {
+  if (!closes || closes.length < 2) return '';
+  const w = 110, h = 30, min = Math.min(...closes), max = Math.max(...closes), span = max - min || 1;
+  const pts = closes.map((c, i) =>
+    `${((i / (closes.length - 1)) * w).toFixed(1)},${(h - ((c - min) / span) * (h - 4) - 2).toFixed(1)}`).join(' ');
+  const color = dir >= 0 ? 'var(--up)' : 'var(--down)';
+  return `<svg width="${w}" height="${h}"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
+}
+
+function render(quotes) {
+  const bySymbol = Object.fromEntries(quotes.map(q => [q.symbol, q]));
+  const rows = watchlist.map(sym => {
+    const q = bySymbol[sym];
+    if (!q) return `<tr><td class="sym">${sym}</td><td class="err">No data</td>${'<td class="num">—</td>'.repeat(3)}<td></td><td></td></tr>`;
+    if (q.error) return `<tr><td class="sym">${sym}</td><td class="err">${q.error}</td>${'<td class="num">—</td>'.repeat(3)}<td></td><td></td></tr>`;
+    const flash = lastPrice[sym] != null && q.price !== lastPrice[sym]
+      ? q.price > lastPrice[sym] ? 'flash-up' : 'flash-down' : '';
+    lastPrice[sym] = q.price;
+    return `<tr class="${flash}">
+      <td class="sym"><a href="#" data-news="${sym}" title="Latest news">${sym}</a></td>
+      <td class="name" title="${esc(q.name)}">${esc(q.name)}</td>
+      <td class="num ${cls(q.change)}">${q.change >= 0 ? '+' : '−'}${Math.abs(q.change).toFixed(2)}</td>
+      <td class="num ${cls(q.changePercent)}">${pct(q.changePercent)}</td>
+      <td class="num">${sparkline(q.closes, q.change)}</td>
+      <td class="num"><button class="ghost" data-remove="${sym}" title="Remove">×</button></td>
+    </tr>`;
+  });
+  $('rows').innerHTML = rows.join('');
+  $('empty').style.display = watchlist.length ? 'none' : 'block';
+  $('count').textContent = `${watchlist.length} symbol${watchlist.length === 1 ? '' : 's'}`;
+  $('updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+}
+
+async function refresh() {
+  if (!watchlist.length) { render([]); return; }
+  try {
+    const res = await fetch(`/api/quotes?symbols=${watchlist.join(',')}`);
+    const { quotes } = await res.json();
+    render(quotes);
+  } catch {
+    $('updated').textContent = 'Refresh failed — retrying';
+  }
+}
+$('addForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const input = $('symbolInput');
+  const sym = input.value.trim().toUpperCase();
+  $('msg').textContent = '';
+  if (!sym) return;
+  if (watchlist.includes(sym)) { $('msg').textContent = `${sym} is already tracked`; input.select(); return; }
+  // Validate before adding so typos don't create dead rows.
+  try {
+    const res = await fetch(`/api/quotes?symbols=${sym}`);
+    const { quotes } = await res.json();
+    if (quotes[0]?.error) { $('msg').textContent = `${sym}: ${quotes[0].error}`; input.select(); return; }
+    watchlist.push(quotes[0].symbol);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(watchlist));
+    input.value = '';
+    refresh();
+  } catch {
+    $('msg').textContent = 'Could not reach server';
+  }
+});
+
+$('rows').addEventListener('click', e => {
+  const link = e.target.closest('[data-news]');
+  if (link) { e.preventDefault(); openPopup(link.dataset.news, link); return; }
+  const btn = e.target.closest('[data-remove]');
+  if (!btn) return;
+  watchlist = watchlist.filter(s => s !== btn.dataset.remove);
+  delete lastPrice[btn.dataset.remove];
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(watchlist));
+  refresh();
+});
+
+// --- news popup ---
+const popup = $('popup');
+let newsSeq = 0; // guards against a stale fetch overwriting a newer popup
+
+function closePopup() { popup.style.display = 'none'; newsSeq++; }
+
+async function openPopup(sym, anchor) {
+  const r = anchor.getBoundingClientRect();
+  popup.style.top = Math.min(r.bottom + 8, innerHeight - 220) + 'px';
+  popup.style.left = Math.max(8, Math.min(r.left, innerWidth - 376)) + 'px';
+  popup.innerHTML = `<div class="ptitle"><span>${sym} — latest news</span><button class="ghost" data-close>×</button></div><div class="pbody">Loading headlines…</div>`;
+  popup.style.display = 'block';
+  const seq = ++newsSeq;
+  try {
+    const res = await fetch(`/api/news?symbol=${sym}`);
+    const data = await res.json();
+    if (seq !== newsSeq) return; // popup was closed/reopened meanwhile
+    if (data.error) throw new Error(data.error);
+    const items = (data.news || []).map(n => `
+      <a class="headline" href="${n.link}" target="_blank" rel="noopener">${esc(n.title)}</a>
+      <div class="pub">${esc(n.publisher)}${n.time ? ' · ' + new Date(n.time).toLocaleDateString() : ''}</div>`).join('');
+    popup.innerHTML = `<div class="ptitle"><span>${sym} — latest news</span><button class="ghost" data-close>×</button></div>`
+      + (items || `<div class="pbody">No recent news found.</div>`);
+  } catch {
+    if (seq !== newsSeq) return;
+    popup.innerHTML = `<div class="ptitle"><span>${sym} — latest news</span><button class="ghost" data-close>×</button></div><div class="pbody">Couldn't load news.</div>`;
+  }
+}
+
+popup.addEventListener('click', e => { if (e.target.closest('[data-close]')) closePopup(); });
+document.addEventListener('click', e => {
+  if (!e.target.closest('#popup') && !e.target.closest('[data-news]')) closePopup();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePopup(); });
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
